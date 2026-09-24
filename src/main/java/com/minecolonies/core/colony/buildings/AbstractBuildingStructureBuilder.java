@@ -14,6 +14,7 @@ import com.minecolonies.api.util.Tuple;
 import com.minecolonies.core.colony.buildings.modules.BuildingModules;
 import com.minecolonies.core.colony.buildings.modules.BuildingResourcesModule;
 import com.minecolonies.core.colony.buildings.modules.WorkerBuildingModule;
+import com.minecolonies.core.colony.buildings.utils.BuildWorkScheduler;
 import com.minecolonies.core.colony.buildings.utils.BuilderBucket;
 import com.minecolonies.core.colony.buildings.utils.BuildingBuilderResource;
 import com.minecolonies.core.colony.jobs.AbstractJobStructure;
@@ -75,6 +76,12 @@ public abstract class AbstractBuildingStructureBuilder extends AbstractBuilding
      * The id of the current workOrder.
      */
     private int workOrderId;
+
+    /**
+     * Hands out disjoint slices of the current structure to the workers of this building, so more than one of them can
+     * build it at once.
+     */
+    private final BuildWorkScheduler workScheduler = new BuildWorkScheduler();
 
     /**
      * Public constructor of the building, creates an object of the building.
@@ -238,6 +245,8 @@ public abstract class AbstractBuildingStructureBuilder extends AbstractBuilding
         {
             this.workOrderId = compound.getInt(TAG_WORK_ORDER);
         }
+
+        this.workScheduler.deserializeNBT(compound);
     }
 
     @Override
@@ -266,6 +275,8 @@ public abstract class AbstractBuildingStructureBuilder extends AbstractBuilding
             compound.putInt(TAG_WORK_ORDER, workOrderId);
         }
 
+        this.workScheduler.serializeNBT(compound);
+
         return compound;
     }
 
@@ -280,7 +291,12 @@ public abstract class AbstractBuildingStructureBuilder extends AbstractBuilding
         super.serializeToView(buf, fullSync);
 
         final WorkerBuildingModule module = getFirstModuleOccurance(WorkerBuildingModule.class);
-        buf.writeUtf(module.getFirstCitizen() != null ? module.getFirstCitizen().getName() : "");
+        final List<ICitizenData> assigned = module.getAssignedCitizen();
+        buf.writeInt(assigned.size());
+        for (final ICitizenData citizen : assigned)
+        {
+            buf.writeUtf(citizen.getName());
+        }
     }
 
     /**
@@ -550,6 +566,18 @@ public abstract class AbstractBuildingStructureBuilder extends AbstractBuilding
         {
             workOrderId = order.getID();
         }
+        workScheduler.setWorkOrder(workOrderId);
+    }
+
+    /**
+     * Get the scheduler handing out slices of the current structure to this building's workers.
+     *
+     * @return the work scheduler.
+     */
+    @NotNull
+    public BuildWorkScheduler getWorkScheduler()
+    {
+        return workScheduler;
     }
 
     /**

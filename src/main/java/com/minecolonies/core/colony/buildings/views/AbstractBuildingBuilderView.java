@@ -5,15 +5,19 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.core.BlockPos;
 import org.jetbrains.annotations.NotNull;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Provides a view of the builder building class.
  */
 public abstract class AbstractBuildingBuilderView extends AbstractBuildingView
 {
     /**
-     * The name of the worker at this building.
+     * The names of the workers at this building, in assignment order.
      */
-    private String workerName;
+    private List<String> workerNames = Collections.emptyList();
 
     /**
      * Public constructor of the view, creates an instance of it.
@@ -30,16 +34,32 @@ public abstract class AbstractBuildingBuilderView extends AbstractBuildingView
     public void deserialize(@NotNull final RegistryFriendlyByteBuf buf)
     {
         super.deserialize(buf);
-        workerName = buf.readUtf(32767);
+        final int count = buf.readInt();
+        final List<String> names = new ArrayList<>(count);
+        for (int i = 0; i < count; i++)
+        {
+            names.add(buf.readUtf(32767));
+        }
+        workerNames = names;
     }
 
     /**
-     * Get the name of the worker assigned to this building.
+     * Get the names of every worker assigned to this building.
      *
-     * @return the name.
+     * @return the names, empty when nobody is assigned.
+     */
+    public List<String> getWorkerNames()
+    {
+        return Collections.unmodifiableList(workerNames);
+    }
+
+    /**
+     * Get the workers assigned to this building as one line of text, for display where a single name used to be shown.
+     *
+     * @return the names separated by commas, or an empty string when nobody is assigned.
      */
     public String getWorkerName()
     {
-        return workerName;
+        return String.join(", ", workerNames);
     }
 }

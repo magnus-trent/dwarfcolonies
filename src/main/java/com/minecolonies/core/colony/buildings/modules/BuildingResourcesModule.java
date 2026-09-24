@@ -43,6 +43,12 @@ public class BuildingResourcesModule extends AbstractBuildingModule implements I
     private Map<String, BuildingBuilderResource> neededResources = new LinkedHashMap<>();
 
     /**
+     * Inventory slots left free in a worker's inventory when working out how much it can carry, so it always has room
+     * to pick things up on the build site.
+     */
+    private static final int SLOTS_KEPT_FREE = 9;
+
+    /**
      * The different possible buckets.
      */
     private Deque<BuilderBucket> buckets = new ArrayDeque<>();
@@ -192,6 +198,25 @@ public class BuildingResourcesModule extends AbstractBuildingModule implements I
     }
 
     /**
+     * How many stacks the workers of this building can carry to the build site between them in one trip.
+     * <p>
+     * A bucket is one trip's worth of materials, so it is sized against the whole crew rather than against a single
+     * worker: a building with several builders in it would otherwise send them back and forth once each for the same
+     * amount of material a lone builder fetched in one go.
+     *
+     * @return the number of stacks the crew can carry, never less than one.
+     */
+    private int getCrewCarryCapacity()
+    {
+        int capacity = 0;
+        for (final ICitizenData citizen : building.getAllAssignedCitizen())
+        {
+            capacity += citizen.getInventory().getSlots() - SLOTS_KEPT_FREE;
+        }
+        return Math.max(capacity, 1);
+    }
+
+    /**
      * Add a new resource to the needed list.
      *
      * @param res    the resource.
@@ -219,7 +244,7 @@ public class BuildingResourcesModule extends AbstractBuildingModule implements I
         BuilderBucket last = buckets.isEmpty() ? null : buckets.removeLast();
 
         final int stacks = (int) Math.ceil((double) amount / res.getMaxStackSize());
-        final int max = building.getAllAssignedCitizen().iterator().next().getInventory().getSlots() - 9;
+        final int max = getCrewCarryCapacity();
 
         if (last == null || last.getTotalStacks() >= max || last.getTotalStacks() + stacks >= max)
         {

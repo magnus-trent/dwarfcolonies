@@ -26,6 +26,7 @@ import com.minecolonies.api.items.ModTags;
 import com.minecolonies.api.util.*;
 import com.minecolonies.core.colony.buildings.AbstractBuildingStructureBuilder;
 import com.minecolonies.core.colony.buildings.modules.BuildingResourcesModule;
+import com.minecolonies.core.colony.buildings.utils.BuildWorkScheduler;
 import com.minecolonies.core.colony.buildings.utils.BuilderBucket;
 import com.minecolonies.core.colony.buildings.utils.BuildingBuilderResource;
 import com.minecolonies.core.colony.jobs.AbstractJobStructure;
@@ -136,6 +137,25 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
      * Block to go to when building
      */
     protected BlockPos gotoPos = null;
+
+    /**
+     * The share of the structure this worker is currently building, handed out by the building's scheduler so that
+     * several workers can build the same structure without placing on top of each other.
+     */
+    @Nullable
+    protected BuildWorkScheduler.Lane currentLane = null;
+
+    /**
+     * How far this worker has walked its own share of the structure. The building's progress position is shared between
+     * all of its workers, so it cannot be used to resume from once more than one of them is building.
+     */
+    protected BlockPos laneProgress = NULL_POS;
+
+    /**
+     * The stage {@link #laneProgress} belongs to, so the position is dropped when the build moves on.
+     */
+    @Nullable
+    protected BuildingProgressStage laneStage = null;
 
     /**
      * The id in the list of the last picked up item.
@@ -339,17 +359,42 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
 
         checkForExtraBuildingActions();
 
-        // some things to do first! then we go to the actual phase!
-
-        //Fill workFrom with the position from where the builder should build.
-        //also ensure we are at that position.
-        final BlockPos progress = getProgressPos() == null ? NULL_POS : getProgressPos().getA();
-        final BlockPos worldPos = getPosToWorkAt();
-
+        // Catch up with the stage the building is on before asking for work, otherwise another worker may already have
+        // moved the build on and we would be asking against a stage that is finished.
         if (getProgressPos() != null)
         {
             structurePlacer.getB().setStage(getProgressPos().getB());
         }
+
+        // Take a share of the structure to work on. Another worker of this building may already be part way through the
+        // current stage, in which case we either get a share of what is left or are told to wait for the stage to close.
+        final BuildingProgressStage activeStage = structurePlacer.getB().getStage();
+        this.currentLane = building.getWorkScheduler().acquire(worker.getCitizenData().getId(), activeStage);
+        if (this.currentLane == null)
+        {
+            if (!building.getWorkScheduler().isStageDrained())
+            {
+                // The rest of the stage belongs to other workers; wait for them to finish it.
+                return getState();
+            }
+            final IAIState advanced = advanceStage(null);
+            return advanced == null ? getState() : advanced;
+        }
+
+        // some things to do first! then we go to the actual phase!
+
+        // Each worker walks its own share of the structure, so it resumes from the position it reached itself rather
+        // than from the building's shared one, which whichever worker stepped last would have overwritten.
+        if (laneStage != activeStage)
+        {
+            laneStage = activeStage;
+            laneProgress = NULL_POS;
+        }
+
+        //Fill workFrom with the position from where the builder should build.
+        //also ensure we are at that position.
+        final BlockPos progress = laneProgress;
+        final BlockPos worldPos = getPosToWorkAt();
 
         if ((worldPos != null || blockToMine != null) && !limitReached && (blockToMine == null
                                                                              ? !walkToConstructionSite(worldPos)
@@ -368,7 +413,7 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
             case BUILD_SOLID:
                 //structure
                 result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_PLACEMENT,
-                  () -> placer.getIterator().increment(this::skipBuilding), false);
+                  () -> placer.getIterator().increment(withinLane(this::skipBuilding)), false);
                 break;
             case WEAK_SOLID:
 
@@ -378,7 +423,7 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
                   progress,
                   StructurePlacer.Operation.BLOCK_PLACEMENT,
                   () -> placer.getIterator()
-                          .increment(((info, pos, handler) -> !BlockUtils.isWeakSolidBlock(info.getBlockInfo().getState()) || DONT_TOUCH_PREDICATE.test(info, pos, handler))),
+                          .increment(withinLane((info, pos, handler) -> !BlockUtils.isWeakSolidBlock(info.getBlockInfo().getState()) || DONT_TOUCH_PREDICATE.test(info, pos, handler))),
                   false);
                 break;
             case CLEAR_WATER:
@@ -388,15 +433,15 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
             case CLEAR_NON_SOLIDS:
                 // clear air
                 result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_PLACEMENT,
-                  () -> placer.getIterator().decrement((info, pos, handler) ->
+                  () -> placer.getIterator().decrement(withinLane((info, pos, handler) ->
                                                          !(info.getBlockInfo().getState().getBlock() instanceof AirBlock)
                                                            || (handler.getWorld().isEmptyBlock(pos))
-                                                           || DONT_TOUCH_PREDICATE.test(info, pos, handler)), false);
+                                                           || DONT_TOUCH_PREDICATE.test(info, pos, handler))), false);
                 break;
             case DECORATE:
                 // not solid
                 result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_PLACEMENT,
-                  () -> placer.getIterator().increment(this::skipDecorate), false);
+                  () -> placer.getIterator().increment(withinLane(this::skipDecorate)), false);
                 break;
             case SPAWN:
                 if (placer.getHandler().getBluePrint().getEntities().length == 0)
@@ -407,24 +452,24 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
                 {
                     // entities
                     result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.SPAWN_ENTITY,
-                      () -> placer.getIterator().increment((info, pos, handler) -> info.getEntities().length == 0 || DONT_TOUCH_PREDICATE.test(info, pos, handler)), true);
+                      () -> placer.getIterator().increment(withinLane((info, pos, handler) -> info.getEntities().length == 0 || DONT_TOUCH_PREDICATE.test(info, pos, handler))), true);
                 }
                 break;
             case REMOVE_WATER:
                 //water
                 placer.getIterator().setRemoving();
                 result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.WATER_REMOVAL,
-                  () -> placer.getIterator().decrement((info, pos, handler) -> info.getBlockInfo().getState().getFluidState().isEmpty()), false);
+                  () -> placer.getIterator().decrement(withinLane((info, pos, handler) -> info.getBlockInfo().getState().getFluidState().isEmpty())), false);
                 break;
             case REMOVE:
                 placer.getIterator().setRemoving();
                 result = placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_REMOVAL,
-                  () -> placer.getIterator().decrement(this::skipRemoval), true);
+                  () -> placer.getIterator().decrement(withinLane(this::skipRemoval)), true);
                 break;
             case CLEAR:
             default:
                 result =
-                  placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_REMOVAL, () -> placer.getIterator().decrement(this::skipClearing), false);
+                  placer.executeStructureStep(world, null, progress, StructurePlacer.Operation.BLOCK_REMOVAL, () -> placer.getIterator().decrement(withinLane(this::skipClearing)), false);
                 break;
         }
 
@@ -436,15 +481,30 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
         final boolean firstIteration = building.getProgress() == null;
         if (result.getBlockResult().getResult() == BlockPlacementResult.Result.FINISHED)
         {
+            final BuildWorkScheduler scheduler = building.getWorkScheduler();
+            final int citizenId = worker.getCitizenData().getId();
+            scheduler.reportExhausted(citizenId);
 
-            building.nextStage();
-            if (!goToNextStage(result))
+            // Asking again either hands back the closing sweep over the whole stage, or reports the stage covered.
+            final BuildWorkScheduler.Lane sweep = scheduler.acquire(citizenId, currentStage);
+            if (sweep != null)
             {
-                building.setProgressPos(null, null);
-                worker.getCitizenData().setStatusPosition(null);
-                return COMPLETE_BUILD;
+                this.currentLane = sweep;
+                this.storeLaneProgress(NULL_POS, currentStage);
+                return getState();
             }
-            this.storeProgressPos(NULL_POS, structurePlacer.getB().getStage());
+
+            if (!scheduler.isStageDrained())
+            {
+                // Other lanes are still working this stage; it is not ours to close.
+                return getState();
+            }
+
+            final IAIState advanced = advanceStage(result);
+            if (advanced != null)
+            {
+                return advanced;
+            }
             if (currentStage == CLEAR)
             {
                 building.checkOrRequestBucket(building.getRequiredResources(), worker.getCitizenData());
@@ -453,7 +513,7 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
         else if (result.getBlockResult().getResult() == BlockPlacementResult.Result.LIMIT_REACHED)
         {
             this.limitReached = true;
-            this.storeProgressPos(result.getIteratorPos(), structurePlacer.getB().getStage());
+            this.storeLaneProgress(result.getIteratorPos(), structurePlacer.getB().getStage());
         }
         else
         {
@@ -466,7 +526,7 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
                 gotoPos = null;
             }
 
-            this.storeProgressPos(result.getIteratorPos(), structurePlacer.getB().getStage());
+            this.storeLaneProgress(result.getIteratorPos(), structurePlacer.getB().getStage());
         }
 
         if (firstIteration)
@@ -529,6 +589,65 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
     protected boolean goToNextStage(StructurePhasePlacementResult result)
     {
         return structurePlacer.getB().nextStage();
+    }
+
+    /**
+     * Move the build on to the next stage, now that every worker has finished the current one.
+     *
+     * @param result the placement result that closed the stage, or null when the stage was closed by another worker.
+     *               Subclasses may inspect the result in {@link #goToNextStage}, so the plain stage advance is used
+     *               when there is none to give them.
+     * @return COMPLETE_BUILD when no stages are left, or null when the next stage was opened.
+     */
+    @Nullable
+    private IAIState advanceStage(@Nullable final StructurePhasePlacementResult result)
+    {
+        building.getWorkScheduler().onStageAdvanced();
+        this.currentLane = null;
+        building.nextStage();
+
+        final boolean moreStages = result == null ? structurePlacer.getB().nextStage() : goToNextStage(result);
+        if (!moreStages)
+        {
+            building.setProgressPos(null, null);
+            worker.getCitizenData().setStatusPosition(null);
+            return COMPLETE_BUILD;
+        }
+
+        this.storeLaneProgress(NULL_POS, structurePlacer.getB().getStage());
+        return null;
+    }
+
+    /**
+     * Record how far this worker has walked its own share of the structure, and keep the building's shared progress
+     * position up to date with it for saving and for the hut's display.
+     *
+     * @param pos   the position reached.
+     * @param stage the stage it belongs to.
+     */
+    private void storeLaneProgress(final BlockPos pos, final BuildingProgressStage stage)
+    {
+        this.laneProgress = pos;
+        this.laneStage = stage;
+        this.storeProgressPos(pos, stage);
+    }
+
+    /**
+     * Wrap a skip predicate so that the worker also skips everything outside the share of the structure it was handed.
+     * Returned unchanged when the worker has the structure to itself, so the single-worker path is untouched.
+     *
+     * @param inner the predicate deciding which positions this stage has no work at.
+     * @return the predicate to hand to the iterator.
+     */
+    private TriPredicate<BlueprintPositionInfo, BlockPos, IStructureHandler> withinLane(
+      final TriPredicate<BlueprintPositionInfo, BlockPos, IStructureHandler> inner)
+    {
+        final BuildWorkScheduler.Lane lane = this.currentLane;
+        if (lane == null || lane.sweep() || lane.total() <= 1)
+        {
+            return inner;
+        }
+        return (info, pos, handler) -> !lane.owns(pos) || inner.test(info, pos, handler);
     }
 
     /**
@@ -1050,6 +1169,12 @@ public abstract class AbstractEntityAIStructure<J extends AbstractJobStructure<?
         structurePlacer = null;
         building.setProgressPos(null, null);
         worker.getCitizenData().setStatusPosition(null);
+
+        // Give the share of the structure back, so the final sweep picks up whatever was left in it.
+        building.getWorkScheduler().release(worker.getCitizenData().getId());
+        this.currentLane = null;
+        this.laneProgress = NULL_POS;
+        this.laneStage = null;
     }
 
     /**

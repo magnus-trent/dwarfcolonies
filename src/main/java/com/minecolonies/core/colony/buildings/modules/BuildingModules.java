@@ -12,6 +12,7 @@ import com.minecolonies.api.entity.citizen.Skill;
 import com.minecolonies.api.items.ModItems;
 import com.minecolonies.api.research.util.ResearchConstants;
 import com.minecolonies.api.util.constant.translation.RequestSystemTranslationConstants;
+import com.minecolonies.core.colony.buildings.utils.WorkerCapacity;
 import com.minecolonies.core.colony.buildings.AbstractBuilding;
 import com.minecolonies.core.colony.buildings.AbstractBuildingGuards;
 import com.minecolonies.core.colony.buildings.modules.settings.*;
@@ -426,7 +427,8 @@ public class BuildingModules
      */
 
     public static final BuildingEntry.ModuleProducer<WorkerBuildingModule,WorkerBuildingModuleView> BUILDER_WORK                    =
-      new BuildingEntry.ModuleProducer<>("builder_work", () -> new WorkerBuildingModule(ModJobs.builder.get(), Skill.Adaptability, Skill.Athletics, false, (b) -> 1),
+      new BuildingEntry.ModuleProducer<>("builder_work",
+        () -> new WorkerBuildingModule(ModJobs.builder.get(), Skill.Adaptability, Skill.Athletics, false, WorkerCapacity.perLevel(2)),
         () -> WorkerBuildingModuleView::new);
     public static final BuildingEntry.ModuleProducer<SettingsModule,SettingsModuleView> BUILDER_SETTINGS                =
       new BuildingEntry.ModuleProducer<>("builder_settings", () -> new SettingsModule()
