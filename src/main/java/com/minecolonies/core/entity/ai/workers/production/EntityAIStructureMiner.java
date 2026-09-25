@@ -1,6 +1,5 @@
 package com.minecolonies.core.entity.ai.workers.production;
 
-import com.ldtteam.structurize.api.RotationMirror;
 import com.ldtteam.structurize.util.BlockUtils;
 import com.minecolonies.api.MinecoloniesAPIProxy;
 import com.minecolonies.api.advancements.AdvancementTriggers;
@@ -19,7 +18,6 @@ import com.minecolonies.core.colony.jobs.JobMiner;
 import com.minecolonies.core.colony.workorders.WorkOrderMiner;
 import com.minecolonies.core.entity.ai.workers.AbstractEntityAIStructureWithWorkOrder;
 import com.minecolonies.core.entity.ai.workers.util.BuildingProgressStage;
-import com.minecolonies.core.entity.ai.workers.util.MineNode;
 import com.minecolonies.core.entity.ai.workers.util.MinerLevel;
 import com.minecolonies.core.util.AdvancementUtils;
 import com.minecolonies.core.util.WorkerUtil;
@@ -55,7 +53,6 @@ import static com.minecolonies.api.util.constant.Constants.ONE_HUNDRED_PERCENT;
 import static com.minecolonies.api.util.constant.Constants.TICKS_SECOND;
 import static com.minecolonies.api.util.constant.StatisticsConstants.*;
 import static com.minecolonies.api.util.constant.TranslationConstants.INVALID_MINESHAFT;
-import static com.minecolonies.api.util.constant.TranslationConstants.NEEDS_BETTER_HUT;
 import static com.minecolonies.core.colony.buildings.modules.BuildingModules.STATS_MODULE;
 import static com.minecolonies.core.colony.buildings.workerbuildings.BuildingMiner.FILL_BLOCK;
 import static com.minecolonies.core.colony.buildings.workerbuildings.BuildingMiner.initStructure;
@@ -80,10 +77,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
      */
     public static final ResourceLocation LUCKY_ORE_LOOT_TABLE = new ResourceLocation(Constants.MOD_ID, "miner/lucky_ore");
 
-    /**
-     * Lead the miner to the other side of the shaft.
-     */
-    private static final int OTHER_SIDE_OF_SHAFT = 6;
 
     /**
      * Batchsizes of fill blocks to request.
@@ -100,7 +93,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
     public static final String RENDER_META_SHOVEL  = "shovel";
     public static final String RENDER_META_PICKAXE = "pickaxe";
 
-    private static final int NODE_DISTANCE    = 7;
     /**
      * Return to chest after building level stacks.
      */
@@ -121,10 +113,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
     private static final int ROTATE_THREE_TIMES = 3;
     private static final int ROTATE_FOUR_TIMES  = 4;
 
-    /**
-     * Check for liquids in the following range.
-     */
-    private static final int LIQUID_CHECK_RANGE = 5;
 
     /**
      * Mining icon
@@ -141,7 +129,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
     private BlockPos currentStandingPosition;
 
     @Nullable
-    private MineNode workingNode = null;
 
     /**
      * Constructor for the Miner. Defines the tasks the miner executes.
@@ -160,8 +147,7 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
           new AITarget(MINER_REPAIRING_LADDER, this::repairLadder, STANDARD_DELAY),
           new AITarget(MINER_CHECK_MINESHAFT, this::checkMineShaft, TICKS_SECOND),
           new AITarget(MINER_MINING_SHAFT, this::doShaftMining, STANDARD_DELAY),
-          new AITarget(MINER_BUILDING_SHAFT, this::doShaftBuilding, STANDARD_DELAY),
-          new AITarget(MINER_MINING_NODE, this::executeNodeMining, STANDARD_DELAY)
+          new AITarget(MINER_BUILDING_SHAFT, this::doShaftBuilding, STANDARD_DELAY)
         );
         worker.setCanPickUpLoot(true);
     }
@@ -420,17 +406,11 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
             AdvancementUtils.TriggerAdvancementPlayersForColony(job.getColony(), AdvancementTriggers.DEEP_MINE.get()::trigger);
         }
 
-        // Check if we reached the mineshaft depth limit
+        // The shaft has reached as deep as it is allowed to go. The mine no longer digs sideways, so there is
+        // nothing further for the miner to do here.
         if (getLastLadder(buildingMiner.getLadderLocation(), world) < buildingMiner.getDepthLimit(world))
         {
-            //If the miner hut has been placed too deep.
-            if (buildingMiner.getFirstModuleOccurance(MinerLevelManagementModule.class).getNumberOfLevels() == 0)
-            {
-                worker.getCitizenData().triggerInteraction(new StandardInteraction(Component.translatableEscape(NEEDS_BETTER_HUT), ChatPriority.BLOCKING));
-                return IDLE;
-            }
-            worker.getCitizenData().setVisibleStatus(MINING);
-            return MINER_MINING_NODE;
+            return IDLE;
         }
         worker.getCitizenData().setVisibleStatus(MINING);
         return MINER_MINING_SHAFT;
@@ -666,100 +646,15 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
         return LOAD_STRUCTURE;
     }
 
-    @NotNull
-    private IAIState executeNodeMining()
-    {
-        final MinerLevelManagementModule module = building.getFirstModuleOccurance(MinerLevelManagementModule.class);
-        ;
-        @Nullable final MinerLevel currentLevel = module.getCurrentLevel();
-        if (currentLevel == null)
-        {
-            module.setCurrentLevel(module.getNumberOfLevels() - 1);
-            return executeNodeMining();
-        }
-        return searchANodeToMine(currentLevel);
-    }
 
-    private IAIState searchANodeToMine(@NotNull final MinerLevel currentLevel)
-    {
-        final BuildingMiner buildingMiner = building;
-        if (buildingMiner == null)
-        {
-            return IDLE;
-        }
-
-        final MinerLevelManagementModule module = building.getFirstModuleOccurance(MinerLevelManagementModule.class);
-        if (workingNode == null || workingNode.getStatus() == MineNode.NodeStatus.COMPLETED)
-        {
-            workingNode = module.getActiveNode();
-            module.setActiveNode(workingNode);
-
-            if (workingNode == null)
-            {
-                final int levelId = module.getLevelId(currentLevel);
-                if (levelId > 0)
-                {
-                    module.setCurrentLevel(levelId - 1);
-                }
-            }
-            return MINER_CHECK_MINESHAFT;
-        }
-
-        //normal facing +x
-        RotationMirror rotMir = RotationMirror.NONE;
-
-        final int workingNodeX = workingNode.getX() > workingNode.getParent().getX() ? 1 : 0;
-        final int workingNodeZ = workingNode.getZ() > workingNode.getParent().getZ() ? 1 : 0;
-        final int vectorX = workingNode.getX() < workingNode.getParent().getX() ? -1 : workingNodeX;
-        final int vectorZ = workingNode.getZ() < workingNode.getParent().getZ() ? -1 : workingNodeZ;
-
-        if (vectorX == -1)
-        {
-            rotMir = RotationMirror.R180;
-        }
-        else if (vectorZ == -1)
-        {
-            rotMir = RotationMirror.R270;
-        }
-        else if (vectorZ == 1)
-        {
-            rotMir = RotationMirror.R90;
-        }
-
-        final MineNode parentNode = currentLevel.getNode(workingNode.getParent());
-
-        if (parentNode != null && parentNode.getStyle() != MineNode.NodeType.SHAFT && parentNode.getStatus() != MineNode.NodeStatus.COMPLETED)
-        {
-            workingNode = parentNode;
-            workingNode.setStatus(MineNode.NodeStatus.AVAILABLE);
-            module.setActiveNode(parentNode);
-            buildingMiner.markDirty();
-            //We need to make sure to walk back to the last valid parent
-
-            if (workingNode.getRotationMirror().isPresent() && workingNode.getRotationMirror().get() != rotMir)
-            {
-                Log.getLogger().warn("Calculated rotation doesn't match recorded: x:" + workingNodeX + " z:" + workingNodeZ + " at: " + building.getColony().getID());
-            }
-
-            return MINER_CHECK_MINESHAFT;
-        }
-        @NotNull final BlockPos standingPosition = new BlockPos(workingNode.getParent().getX(), currentLevel.getDepth(), workingNode.getParent().getZ());
-        currentStandingPosition = standingPosition;
-        if (workingNode != null && currentLevel.getNode(new Vec2i(workingNode.getX(), workingNode.getZ())) == null)
-        {
-            module.setActiveNode(null);
-            module.setOldNode(null);
-            return MINER_MINING_SHAFT;
-        }
-
-        if ((workingNode.getStatus() == MineNode.NodeStatus.AVAILABLE || workingNode.getStatus() == MineNode.NodeStatus.IN_PROGRESS) && !walkWithProxy(standingPosition))
-        {
-            workingNode.setRotationMirror(rotMir);
-            return executeStructurePlacement(workingNode, standingPosition);
-        }
-        return MINER_CHECK_MINESHAFT;
-    }
-
+    /**
+     * Make a block safe to stand next to: mine out anything that will not hold the miner up, anything flowing, and any
+     * ore worth taking, then fill the hole back in.
+     *
+     * @param curBlock  the block to make safe.
+     * @param safeStand where the miner stands while doing it.
+     * @return true when the block is already safe and nothing had to be done.
+     */
     private boolean secureBlock(@NotNull final BlockPos curBlock, @NotNull final BlockPos safeStand)
     {
         final BlockState stateAtPos = getBlockState(curBlock);
@@ -782,49 +677,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
             return false;
         }
         return true;
-    }
-
-    private IAIState executeStructurePlacement(@NotNull final MineNode mineNode, @NotNull final BlockPos standingPosition)
-    {
-        mineNode.setStatus(MineNode.NodeStatus.IN_PROGRESS);
-        building.markDirty();
-        //Preload structures
-        if (building.getWorkOrder() == null || building.getWorkOrder().getBlueprint() == null)
-        {
-            initStructure(mineNode,
-              new BlockPos(mineNode.getX(), building.getFirstModuleOccurance(MinerLevelManagementModule.class).getCurrentLevel().getDepth(), mineNode.getZ()),
-              building,
-              world,
-              job);
-            return LOAD_STRUCTURE;
-        }
-
-        //Check for liquids
-        for (int x = -NODE_DISTANCE / 2 - 1; x <= NODE_DISTANCE / 2 + 1; x++)
-        {
-            for (int z = -NODE_DISTANCE / 2 - 1; z <= NODE_DISTANCE / 2 + 1; z++)
-            {
-                for (int y = -1; y <= LIQUID_CHECK_RANGE; y++)
-                {
-                    @NotNull final BlockPos curBlock = new BlockPos(mineNode.getX() + x, standingPosition.getY() + y, mineNode.getZ() + z);
-                    final BlockState block = getBlockState(curBlock);
-                    if (block.getFluidState().isSource())
-                    {
-                        BlockUtils.removeFluid(world, curBlock);
-                        setBlockFromInventory(curBlock, getMainFillBlock());
-                    }
-                }
-            }
-        }
-
-        workingNode = null;
-
-        if (building.getWorkOrder().getBlueprint() != null)
-        {
-            return LOAD_STRUCTURE;
-        }
-
-        return MINER_MINING_NODE;
     }
 
     @Override
@@ -895,23 +747,6 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
                 }
                 WorkerUtil.updateLevelSign(world, currentLevel, module.getLevelId(currentLevel));
             }
-            else
-            {
-                final MinerLevel currentLevel = module.getCurrentLevel();
-                if (currentLevel == null)
-                {
-                    Log.getLogger().error("The mine state of the mine at: " + building.getID().toShortString() + " got corrupted. Trying to recover from this somehow....");
-
-                    // This can only happen if something with the state got broken. Safest option is not handling the node closing and just doing the normal complete actions, it will potentially recover.
-                }
-                else
-                {
-                    currentLevel.closeNextNode(structurePlacer.getB().getRotationMirror(), module.getActiveNode(), world);
-                    module.setActiveNode(null);
-                    module.setOldNode(workingNode);
-                    WorkerUtil.updateLevelSign(world, currentLevel, module.getLevelId(currentLevel));
-                }
-            }
         }
         super.executeSpecificCompleteActions();
 
@@ -936,9 +771,9 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
     /**
      * Calculates the working position.
      * <p>
-     * Takes a min distance from width and length.
-     * <p>
-     * Then finds the floor level at that distance and then check if it does contain two air levels.
+     * The miner used to stand relative to whichever tunnel node it was digging. There are no tunnels any more, and the
+     * level's node grid is no longer kept up to date, so working a position out of it would send the miner off to a
+     * tunnel that was never dug. All of the miner's work is in the shaft now, so it works where the block is.
      *
      * @param targetPosition the position to work at.
      * @return BlockPos position to work from.
@@ -946,39 +781,7 @@ public class EntityAIStructureMiner extends AbstractEntityAIStructureWithWorkOrd
     @Override
     public BlockPos getWorkingPosition(final BlockPos targetPosition)
     {
-        return getNodeMiningPosition(targetPosition);
-    }
-
-    /**
-     * Create a save mining position for the miner.
-     *
-     * @param blockToMine block which should be mined or placed.
-     * @return the save position.
-     */
-    private BlockPos getNodeMiningPosition(final BlockPos blockToMine)
-    {
-        final BuildingMiner buildingMiner = building;
-        final MinerLevelManagementModule module = buildingMiner.getFirstModuleOccurance(MinerLevelManagementModule.class);
-        ;
-
-        if (module.getCurrentLevel() == null || module.getActiveNode() == null)
-        {
-            return blockToMine;
-        }
-        final Vec2i parentPos = module.getActiveNode().getParent();
-        final BlockPos vector = building.getLadderLocation().subtract(building.getCobbleLocation());
-
-        if (parentPos != null && module.getCurrentLevel().getNode(parentPos) != null
-              && module.getCurrentLevel().getNode(parentPos).getStyle() == MineNode.NodeType.SHAFT)
-        {
-            final BlockPos ladderPos = buildingMiner.getLadderLocation();
-            return new BlockPos(
-              ladderPos.getX() + vector.getX() * OTHER_SIDE_OF_SHAFT,
-              module.getCurrentLevel().getDepth(),
-              ladderPos.getZ() + vector.getZ() * OTHER_SIDE_OF_SHAFT);
-        }
-        final Vec2i pos = module.getActiveNode().getParent();
-        return new BlockPos(pos.getX(), module.getCurrentLevel().getDepth(), pos.getZ());
+        return targetPosition;
     }
 
     @Override

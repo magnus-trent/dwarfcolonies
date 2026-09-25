@@ -55,15 +55,6 @@ public class BuildingMiner extends AbstractBuildingStructureBuilder
     public static final ISettingKey<IntSetting> MAX_DEPTH = new SettingKey<>(IntSetting.class, new ResourceLocation(Constants.MOD_ID, "maxdepth"));
 
     /**
-     * Mine height levels:
-     * 48: Copper
-     * 16: Iron
-     * -16: Gold
-     * -100: Diamond
-     */
-    private static final List<Integer> MINING_LEVELS = ImmutableList.copyOf(new Integer[] {48, 16, -16, -100});
-
-    /**
      * The job description.
      */
     private static final String MINER = "miner";
@@ -162,36 +153,17 @@ public class BuildingMiner extends AbstractBuildingStructureBuilder
     }
 
     /**
-     * Returns the depth limit. Limitted by building level.
-     * <pre>
-     * - Level 1: 50
-     * - Level 2: 20
-     * - Level 3: 0
-     * </pre>
+     * Returns the depth limit.
+     * <p>
+     * The hut's level no longer caps how deep the shaft may go: depth is paced by whether the materials to build
+     * downwards keep arriving, and the hut's level governs how wide an area the mine draws ore from instead. The limit
+     * is therefore the player's own maximum-depth setting, kept inside the world's build height.
      *
      * @return Depth limit.
      */
     public int getDepthLimit(final Level level)
     {
-        int buildingY = this.getLadderLocation().getY() - 5;
-
-        int buildingLevels = getBuildingLevel();
-        int yLevel = 0;
-        for (final Integer miningLevel : MINING_LEVELS)
-        {
-            if (miningLevel < buildingY)
-            {
-                yLevel = miningLevel;
-                buildingLevels--;
-            }
-
-            if (buildingLevels == 0)
-            {
-                break;
-            }
-        }
-
-        return normalizeMaxDepth(yLevel, level);
+        return normalizeMaxDepth(level.getMinBuildHeight() + 5, level);
     }
 
     /**
