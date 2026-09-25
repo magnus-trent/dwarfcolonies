@@ -287,6 +287,7 @@ public final class ModBuildingsInitializer
           .addBuildingModuleProducer(QUARRIER_WORK)
           .addBuildingModuleProducer(MINER_CRAFT)
           .addBuildingModuleProducer(MINER_LEVELS)
+          .addBuildingModuleProducer(MINER_SURVEY)
           .addBuildingModuleProducer(MINER_SETTINGS)
           .addBuildingModuleProducer(MINER_GUARD_ASSIGN)
           .addBuildingModuleProducer(BUILDING_RESOURCES)

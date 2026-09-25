@@ -496,6 +496,8 @@ public class BuildingModules
       new BuildingEntry.ModuleProducer<>("miner_craft", () -> new SimpleCraftingModule(ModJobs.miner.get()), () -> CraftingModuleView::new);
     public static final BuildingEntry.ModuleProducer<MinerLevelManagementModule,MinerLevelManagementModuleView> MINER_LEVELS          =
       new BuildingEntry.ModuleProducer<>("miner_levels", MinerLevelManagementModule::new, () -> MinerLevelManagementModuleView::new);
+    public static final BuildingEntry.ModuleProducer<MineSurveyModule,IBuildingModuleView> MINER_SURVEY          =
+      new BuildingEntry.ModuleProducer<>("miner_survey", MineSurveyModule::new, null);
     public static final BuildingEntry.ModuleProducer<SettingsModule,SettingsModuleView> MINER_SETTINGS        =
       new BuildingEntry.ModuleProducer<>("miner_settings", () -> new SettingsModule()
         .with(AbstractCraftingBuildingModule.RECIPE_MODE, new CrafterRecipeSetting())

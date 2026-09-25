@@ -16,6 +16,7 @@ import com.minecolonies.core.colony.buildings.modules.settings.IntSetting;
 import com.minecolonies.core.colony.buildings.modules.settings.SettingKey;
 import com.minecolonies.core.colony.jobs.JobMiner;
 import com.minecolonies.core.colony.workorders.WorkOrderMiner;
+import com.minecolonies.core.util.WorkerUtil;
 import com.minecolonies.core.entity.ai.workers.util.MineNode;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.HolderLookup;
@@ -150,6 +151,26 @@ public class BuildingMiner extends AbstractBuildingStructureBuilder
         BlockPosUtil.writeOptional(compound, TAG_LLOCATION, ladderLocation);
 
         return compound;
+    }
+
+    /**
+     * How deep the shaft has actually been dug, as a height.
+     * <p>
+     * This is read off the ladder rather than stored, so it stays true even if a player digs the shaft themselves or
+     * fills part of it back in.
+     *
+     * @param level the world to look in.
+     * @return the height of the bottom of the shaft.
+     */
+    public int getShaftDepth(final Level level)
+    {
+        final BlockPos ladder = getLadderLocation();
+        if (ladder == null)
+        {
+            // The hut has not been built far enough for its ladder to exist, so nothing has been dug yet.
+            return getPosition().getY();
+        }
+        return WorkerUtil.getLastLadder(ladder, level);
     }
 
     /**
